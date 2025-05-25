@@ -595,3 +595,228 @@ console.log('App with path mapping');`,
 		t.Error("Should preserve React as external import")
 	}
 }
+
+func TestFlattenFile_NodePrefixNormalization(t *testing.T) {
+	files := map[string]string{
+		"main.ts": `import { writeFile } from "node:fs/promises";
+import './helper';
+
+console.log('main');`,
+		"helper.ts": `import { writeFile, readFile } from "fs/promises";
+
+export const helper = () => writeFile;`,
+	}
+
+	tempDir := createTestFiles(t, files)
+	mainFile := filepath.Join(tempDir, "main.ts")
+
+	flattener := NewFlattener()
+	result, err := flattener.FlattenFile(mainFile)
+
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Should have only one import from fs/promises (normalized from node:fs/promises)
+	fsPromisesImportCount := strings.Count(result, `from "fs/promises"`)
+	if fsPromisesImportCount != 1 {
+		t.Errorf("Expected exactly one import from fs/promises, but found %d", fsPromisesImportCount)
+	}
+
+	// Should not contain node: prefix in the result
+	if strings.Contains(result, `from "node:fs/promises"`) {
+		t.Error("Should normalize node:fs/promises to fs/promises")
+	}
+
+	// Should contain both writeFile and readFile in merged import
+	if !strings.Contains(result, "writeFile") {
+		t.Error("Should contain writeFile in merged import")
+	}
+	if !strings.Contains(result, "readFile") {
+		t.Error("Should contain readFile in merged import")
+	}
+}
+
+func TestFlattenFile_CrossModuleNamingConflicts(t *testing.T) {
+	files := map[string]string{
+		"main.ts": `import { writeFile } from "fs";
+import './helper';
+
+console.log('main');`,
+		"helper.ts": `import { writeFile } from "fs/promises";
+
+export const helper = () => writeFile;`,
+	}
+
+	tempDir := createTestFiles(t, files)
+	mainFile := filepath.Join(tempDir, "main.ts")
+
+	flattener := NewFlattener()
+	result, err := flattener.FlattenFile(mainFile)
+
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Should have separate imports from fs and fs/promises
+	exactFsCount := strings.Count(result, `from "fs";`)
+	fsPromisesCount := strings.Count(result, `from "fs/promises"`)
+
+	if exactFsCount != 1 {
+		t.Errorf("Expected exactly 1 import from 'fs', but found %d", exactFsCount)
+	}
+	if fsPromisesCount != 1 {
+		t.Errorf("Expected exactly 1 import from 'fs/promises', but found %d", fsPromisesCount)
+	}
+
+	// Should have both modules preserved (different modules, shouldn't be merged)
+	if !strings.Contains(result, `from "fs";`) {
+		t.Error("Should preserve import from fs")
+	}
+	if !strings.Contains(result, `from "fs/promises"`) {
+		t.Error("Should preserve import from fs/promises")
+	}
+
+	// Should handle naming conflict by creating aliases
+	// The second writeFile import should be aliased to avoid conflicts
+	if !strings.Contains(result, "writeFile_fs_promises") {
+		t.Error("Should create alias 'writeFile_fs_promises' for conflicting import from fs/promises")
+	}
+
+	// Should have at least 2 import statements
+	lines := strings.Split(result, "\n")
+	var importLines []string
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "import ") {
+			importLines = append(importLines, line)
+		}
+	}
+
+	if len(importLines) < 2 {
+		t.Error("Should have at least 2 import statements")
+	}
+}
+
+func TestFlattenFile_ComplexConflictResolution(t *testing.T) {
+	files := map[string]string{
+		"main.ts": `import React from "react";
+import { writeFile } from "fs";
+import './helper1';
+import './helper2';
+
+console.log('main');`,
+		"helper1.ts": `import React from "react-native";
+import { writeFile } from "fs/promises";
+
+export const helper1 = () => React;`,
+		"helper2.ts": `import { Component } from "react";
+import { readFile } from "fs/promises";
+
+export const helper2 = () => Component;`,
+	}
+
+	tempDir := createTestFiles(t, files)
+	mainFile := filepath.Join(tempDir, "main.ts")
+
+	flattener := NewFlattener()
+	result, err := flattener.FlattenFile(mainFile)
+
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Should have separate imports for different modules
+	if !strings.Contains(result, `from "react"`) {
+		t.Error("Should preserve react import")
+	}
+	if !strings.Contains(result, `from "react-native"`) {
+		t.Error("Should preserve react-native import")
+	}
+	if !strings.Contains(result, `from "fs"`) {
+		t.Error("Should preserve fs import")
+	}
+	if !strings.Contains(result, `from "fs/promises"`) {
+		t.Error("Should preserve fs/promises import")
+	}
+
+	// React imports should be properly merged within same module
+	reactImportCount := strings.Count(result, `from "react"`)
+	if reactImportCount != 1 {
+		t.Errorf("Expected exactly one import from react, but found %d", reactImportCount)
+	}
+
+	// fs/promises imports should be merged
+	fsPromisesImportCount := strings.Count(result, `from "fs/promises"`)
+	if fsPromisesImportCount != 1 {
+		t.Errorf("Expected exactly one import from fs/promises, but found %d", fsPromisesImportCount)
+	}
+
+	// Should contain both writeFile and readFile in fs/promises import
+	fsPromisesLine := ""
+	lines := strings.Split(result, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, `from "fs/promises"`) {
+			fsPromisesLine = line
+			break
+		}
+	}
+
+	if fsPromisesLine == "" {
+		t.Error("Should have fs/promises import line")
+	} else {
+		if !strings.Contains(fsPromisesLine, "writeFile") {
+			t.Error("fs/promises import should contain writeFile")
+		}
+		if !strings.Contains(fsPromisesLine, "readFile") {
+			t.Error("fs/promises import should contain readFile")
+		}
+	}
+}
+
+func TestNormalizeModulePath(t *testing.T) {
+	flattener := NewFlattener()
+
+	testCases := []struct {
+		input    string
+		expected string
+	}{
+		{"node:fs", "fs"},
+		{"node:fs/promises", "fs/promises"},
+		{"node:path", "path"},
+		{"fs", "fs"},
+		{"fs/promises", "fs/promises"},
+		{"react", "react"},
+		{"@types/node", "@types/node"},
+	}
+
+	for _, tc := range testCases {
+		result := flattener.normalizeModulePath(tc.input)
+		if result != tc.expected {
+			t.Errorf("normalizeModulePath(%s) = %s, expected %s", tc.input, result, tc.expected)
+		}
+	}
+}
+
+func TestExtractModuleIdentifier(t *testing.T) {
+	flattener := NewFlattener()
+
+	testCases := []struct {
+		input    string
+		expected string
+	}{
+		{"fs", "fs"},
+		{"fs/promises", "fs_promises"},
+		{"@nestjs/common", "nestjs_common"},
+		{"@types/react", "types_react"},
+		{"react-dom", "react_dom"},
+		{"some.module", "some_module"},
+		{"123module", "_123module"},
+	}
+
+	for _, tc := range testCases {
+		result := flattener.extractModuleIdentifier(tc.input)
+		if result != tc.expected {
+			t.Errorf("extractModuleIdentifier(%s) = %s, expected %s", tc.input, result, tc.expected)
+		}
+	}
+}

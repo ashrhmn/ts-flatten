@@ -6,8 +6,11 @@ A command-line tool that flattens TypeScript files by recursively inlining all l
 
 - **Recursive flattening**: Follows local import chains through multiple files and directories
 - **Selective inlining**: Only inlines local imports (paths starting with `.` or `..`), preserves external imports
+- **Advanced import merging**: Automatically removes duplicate external imports and intelligently merges imports from the same module
+- **Node.js module normalization**: Handles `node:` prefix imports (e.g., `node:fs/promises` → `fs/promises`) and merges them correctly
+- **Cross-module conflict resolution**: Automatically resolves naming conflicts when the same name is imported from different modules using smart aliasing
 - **Cycle detection**: Prevents infinite loops when encountering circular dependencies
-- **Multi-format support**: Handles `.ts`, `.tsx`, `.js`, `.jsx` files and index files
+- **Multi-format support**: Handles `.ts`, `.tsx`, `.js`, `.jsx`, `.d.ts` files and index files
 - **Robust path resolution**: Automatically resolves extensions and index files
 - **Clean output**: Adds file headers and removes import statements for inlined files
 
@@ -174,6 +177,77 @@ export function helper() {
 console.log("App starting");
 ```
 
+## Advanced Import Handling
+
+### Import Merging and Deduplication
+
+The tool automatically merges imports from the same module and removes duplicates:
+
+**Input:**
+
+```typescript
+// main.ts
+import React from "react";
+import { useState } from "react";
+
+// helper.ts (inlined)
+import React from "react";
+import { useEffect } from "react";
+```
+
+**Output:**
+
+```typescript
+import React, { useState, useEffect } from "react";
+
+// ... inlined content
+```
+
+### Node.js Module Normalization
+
+Handles `node:` prefix imports and merges them with equivalent imports:
+
+**Input:**
+
+```typescript
+// main.ts
+import { writeFile } from "node:fs/promises";
+
+// helper.ts (inlined)
+import { readFile } from "fs/promises";
+```
+
+**Output:**
+
+```typescript
+import { writeFile, readFile } from "fs/promises";
+
+// ... inlined content
+```
+
+### Cross-Module Conflict Resolution
+
+When the same name is imported from different modules, the tool automatically creates aliases:
+
+**Input:**
+
+```typescript
+// main.ts
+import { writeFile } from "fs";
+
+// helper.ts (inlined)
+import { writeFile } from "fs/promises";
+```
+
+**Output:**
+
+```typescript
+import { writeFile } from "fs";
+import { writeFile as writeFile_fs_promises } from "fs/promises";
+
+// ... inlined content
+```
+
 ## Supported Import Patterns
 
 The tool recognizes and handles these TypeScript import patterns:
@@ -194,6 +268,9 @@ import "./path";
 // Type imports
 import type { Something } from "./path";
 import type Something from "./path";
+
+// Node.js modules with node: prefix
+import { readFile } from "node:fs/promises";
 ```
 
 ## Path Resolution

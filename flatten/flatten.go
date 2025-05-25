@@ -288,12 +288,18 @@ func (f *Flattener) fileExists(path string) bool {
 func (f *Flattener) addExternalImport(importInfo ImportInfo) {
 	details := f.parseImportStatement(importInfo.Statement, importInfo.Path)
 
-	if existing, exists := f.externalImports[details.ModulePath]; exists {
+	// Normalize module path (handle node: prefix)
+	normalizedPath := f.normalizeModulePath(details.ModulePath)
+	details.ModulePath = normalizedPath
+
+	if existing, exists := f.externalImports[normalizedPath]; exists {
 		// Merge with existing import from same module
 		f.mergeImportDetails(existing, details)
 	} else {
+		// Check for naming conflicts with other modules before adding
+		f.resolveNamingConflicts(details)
 		// New module, add it
-		f.externalImports[details.ModulePath] = details
+		f.externalImports[normalizedPath] = details
 	}
 }
 
@@ -452,4 +458,90 @@ func (f *Flattener) formatNamedImports(namedImports map[string]string) string {
 		}
 	}
 	return strings.Join(imports, ", ")
+}
+
+// normalizeModulePath normalizes module paths to handle equivalent imports
+func (f *Flattener) normalizeModulePath(modulePath string) string {
+	// Handle Node.js built-in modules with node: prefix
+	// node:fs/promises -> fs/promises
+	// node:fs -> fs
+	if strings.HasPrefix(modulePath, "node:") {
+		return modulePath[5:] // Remove "node:" prefix
+	}
+	return modulePath
+}
+
+// resolveNamingConflicts checks for naming conflicts with imports from other modules
+func (f *Flattener) resolveNamingConflicts(newDetails *ImportDetails) {
+	// Check for conflicts with imports from other modules
+	for modulePath, existingDetails := range f.externalImports {
+		if modulePath == newDetails.ModulePath {
+			continue // Skip same module (will be merged later)
+		}
+
+		// Check default import conflicts
+		if newDetails.DefaultImport != "" && existingDetails.DefaultImport != "" &&
+			newDetails.DefaultImport == existingDetails.DefaultImport {
+			// Conflict: same default import name from different modules
+			// Create alias for the new import
+			newDetails.DefaultImport = f.createModuleAlias(newDetails.DefaultImport, newDetails.ModulePath)
+		}
+
+		// Check namespace import conflicts
+		if newDetails.NamespaceAlias != "" && existingDetails.NamespaceAlias != "" &&
+			newDetails.NamespaceAlias == existingDetails.NamespaceAlias {
+			// Conflict: same namespace alias from different modules
+			newDetails.NamespaceAlias = f.createModuleAlias(newDetails.NamespaceAlias, newDetails.ModulePath)
+		}
+
+		// Check named import conflicts
+		for name, alias := range newDetails.NamedImports {
+			for existingName, existingAlias := range existingDetails.NamedImports {
+				if alias == existingAlias {
+					// Conflict: same alias from different modules
+					if name == existingName {
+						// Same import name but different modules - create alias for new import
+						newDetails.NamedImports[name] = f.createModuleAlias(alias, newDetails.ModulePath)
+					} else {
+						// Different import names but same alias - create unique alias for new import
+						newDetails.NamedImports[name] = f.createModuleAlias(alias, newDetails.ModulePath)
+					}
+				}
+			}
+		}
+	}
+}
+
+// createModuleAlias creates a unique alias based on module name
+func (f *Flattener) createModuleAlias(baseName, modulePath string) string {
+	// Extract a clean identifier from the module path
+	moduleIdentifier := f.extractModuleIdentifier(modulePath)
+	return fmt.Sprintf("%s_%s", baseName, moduleIdentifier)
+}
+
+// extractModuleIdentifier extracts a clean identifier from module path
+func (f *Flattener) extractModuleIdentifier(modulePath string) string {
+	// Handle various module path formats
+	// fs/promises -> fs_promises
+	// @nestjs/common -> nestjs_common
+	// react -> react
+
+	identifier := modulePath
+
+	// Remove @ prefix
+	if strings.HasPrefix(identifier, "@") {
+		identifier = identifier[1:]
+	}
+
+	// Replace slashes and special characters with underscores
+	identifier = strings.ReplaceAll(identifier, "/", "_")
+	identifier = strings.ReplaceAll(identifier, "-", "_")
+	identifier = strings.ReplaceAll(identifier, ".", "_")
+
+	// Ensure it starts with a letter or underscore
+	if len(identifier) > 0 && identifier[0] >= '0' && identifier[0] <= '9' {
+		identifier = "_" + identifier
+	}
+
+	return identifier
 }
