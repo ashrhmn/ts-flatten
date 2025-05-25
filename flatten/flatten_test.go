@@ -516,3 +516,82 @@ export const helper2 = { BadRequestException, Injectable };`,
 		t.Errorf("Injectable should appear in exactly one import statement, but found %d", injectableInImportCount)
 	}
 }
+
+func TestFlattenFile_AdditionalLocalPrefixes(t *testing.T) {
+	files := map[string]string{
+		"main.ts": `import React from 'react';
+import { Button } from 'src/components/Button';
+import { helper } from 'main/utils/helper';
+import './local';
+
+console.log('App with path mapping');`,
+		"src/components/Button.tsx": `export const Button = () => {
+    return "Button from src/components";
+};`,
+		"main/utils/helper.ts": `export function helper() {
+    return "Helper from main/utils";
+}`,
+		"local.ts": `export const local = "Local file";`,
+	}
+
+	tempDir := createTestFiles(t, files)
+	mainFile := filepath.Join(tempDir, "main.ts")
+
+	// Test without additional prefixes - should treat src/ and main/ as external
+	flattener1 := NewFlattener()
+	result1, err := flattener1.FlattenFile(mainFile)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Should contain external imports for src and main
+	if !strings.Contains(result1, `from "src/components/Button"`) {
+		t.Error("Should preserve src/components/Button as external import")
+	}
+	if !strings.Contains(result1, `from "main/utils/helper"`) {
+		t.Error("Should preserve main/utils/helper as external import")
+	}
+	// Should still inline local relative import
+	if !strings.Contains(result1, "// File: local.ts") {
+		t.Error("Should inline local relative import")
+	}
+
+	// Test with additional prefixes - should inline src/ and main/ imports
+	flattener2 := NewFlattenerWithPrefixes([]string{"src", "main"})
+	result2, err := flattener2.FlattenFile(mainFile)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Should not contain external imports for src and main
+	if strings.Contains(result2, `from "src/components/Button"`) {
+		t.Error("Should inline src/components/Button, not treat as external")
+	}
+	if strings.Contains(result2, `from "main/utils/helper"`) {
+		t.Error("Should inline main/utils/helper, not treat as external")
+	}
+
+	// Should contain file headers for inlined files
+	if !strings.Contains(result2, "// File: src/components/Button.tsx") {
+		t.Error("Should contain src/components/Button.tsx file header")
+	}
+	if !strings.Contains(result2, "// File: main/utils/helper.ts") {
+		t.Error("Should contain main/utils/helper.ts file header")
+	}
+	if !strings.Contains(result2, "// File: local.ts") {
+		t.Error("Should contain local.ts file header")
+	}
+
+	// Should contain content from inlined files
+	if !strings.Contains(result2, "Button from src/components") {
+		t.Error("Should contain content from src/components/Button.tsx")
+	}
+	if !strings.Contains(result2, "Helper from main/utils") {
+		t.Error("Should contain content from main/utils/helper.ts")
+	}
+
+	// Should still preserve React import
+	if !strings.Contains(result2, `from "react"`) {
+		t.Error("Should preserve React as external import")
+	}
+}

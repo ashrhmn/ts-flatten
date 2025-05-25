@@ -23,8 +23,12 @@ type Flattener struct {
 	processedFiles map[string]bool
 	// baseDir is the directory of the entry file, used for resolving relative paths
 	baseDir string
+	// rootDir is the root directory for resolving path-mapped imports (defaults to baseDir)
+	rootDir string
 	// externalImports tracks external imports grouped by module path for merging
 	externalImports map[string]*ImportDetails
+	// additionalLocalPrefixes contains additional prefixes to treat as local imports
+	additionalLocalPrefixes []string
 }
 
 // NewFlattener creates a new Flattener instance
@@ -33,6 +37,20 @@ func NewFlattener() *Flattener {
 		processedFiles:  make(map[string]bool),
 		externalImports: make(map[string]*ImportDetails),
 	}
+}
+
+// NewFlattenerWithPrefixes creates a new Flattener instance with additional local prefixes
+func NewFlattenerWithPrefixes(additionalPrefixes []string) *Flattener {
+	return &Flattener{
+		processedFiles:          make(map[string]bool),
+		externalImports:         make(map[string]*ImportDetails),
+		additionalLocalPrefixes: additionalPrefixes,
+	}
+}
+
+// SetRootDir sets the root directory for resolving path-mapped imports
+func (f *Flattener) SetRootDir(rootDir string) {
+	f.rootDir = rootDir
 }
 
 // FlattenFile reads a TypeScript file and recursively inlines all local imports
@@ -45,6 +63,11 @@ func (f *Flattener) FlattenFile(entryFile string) (string, error) {
 	}
 
 	f.baseDir = filepath.Dir(absPath)
+
+	// Set rootDir to baseDir if not already set
+	if f.rootDir == "" {
+		f.rootDir = f.baseDir
+	}
 
 	// Start the recursive flattening process
 	inlinedContent, err := f.flattenFileRecursive(absPath, "")
@@ -200,19 +223,39 @@ func (f *Flattener) parseImports(content string) ([]ImportInfo, string) {
 	return imports, contentWithoutImports
 }
 
-// isLocalImport determines if an import path is local (relative)
+// isLocalImport determines if an import path is local (relative or matching additional prefixes)
 func (f *Flattener) isLocalImport(importPath string) bool {
 	// Local imports start with . or ..
-	return strings.HasPrefix(importPath, "./") || strings.HasPrefix(importPath, "../") || importPath == "." || importPath == ".."
+	if strings.HasPrefix(importPath, "./") || strings.HasPrefix(importPath, "../") || importPath == "." || importPath == ".." {
+		return true
+	}
+
+	// Check against additional local prefixes
+	for _, prefix := range f.additionalLocalPrefixes {
+		if strings.HasPrefix(importPath, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
 
-// resolveImportPath resolves a relative import path to an absolute file path
+// resolveImportPath resolves an import path to an absolute file path
 func (f *Flattener) resolveImportPath(currentDir, importPath string) string {
-	// Join the current directory with the import path
-	resolved := filepath.Join(currentDir, importPath)
+	var resolved string
+
+	// Check if this is a relative import (starts with . or ..)
+	if strings.HasPrefix(importPath, "./") || strings.HasPrefix(importPath, "../") || importPath == "." || importPath == ".." {
+		// Join the current directory with the import path
+		resolved = filepath.Join(currentDir, importPath)
+	} else {
+		// This is likely an additional local prefix import
+		// Try to resolve it relative to the root directory
+		resolved = filepath.Join(f.rootDir, importPath)
+	}
 
 	// Try different extensions if the path doesn't exist
-	extensions := []string{"", ".ts", ".tsx", ".js", ".jsx"}
+	extensions := []string{"", ".ts", ".tsx", ".d.ts", ".js", ".jsx"}
 
 	for _, ext := range extensions {
 		candidate := resolved + ext
@@ -222,7 +265,7 @@ func (f *Flattener) resolveImportPath(currentDir, importPath string) string {
 	}
 
 	// If it's a directory, try index files
-	indexFiles := []string{"index.ts", "index.tsx", "index.js", "index.jsx"}
+	indexFiles := []string{"index.ts", "index.tsx", "index.d.ts", "index.js", "index.jsx"}
 	for _, indexFile := range indexFiles {
 		candidate := filepath.Join(resolved, indexFile)
 		if f.fileExists(candidate) {

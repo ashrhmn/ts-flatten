@@ -22,8 +22,13 @@ go build -o ts-flatten .
 ## Usage
 
 ```bash
-./ts-flatten <path-to-typescript-file>
+./ts-flatten [options] <path-to-typescript-file>
 ```
+
+### Options
+
+- `--include <prefixes>` or `-i <prefixes>`: Comma-separated list of import prefixes to treat as local imports (e.g., `src,main`)
+- `--root <directory>` or `-r <directory>`: Root directory for resolving path-mapped imports (defaults to parent of entry file)
 
 ### Examples
 
@@ -31,8 +36,17 @@ go build -o ts-flatten .
 # Flatten a single TypeScript file
 ./ts-flatten src/main.ts
 
-# Flatten a TypeScript React component
-./ts-flatten components/App.tsx
+# Flatten with TypeScript path mappings (e.g., tsconfig paths like "src/*")
+./ts-flatten --include src,main src/main.ts
+
+# Short form of include flag
+./ts-flatten -i src src/main.ts
+
+# Multiple prefixes
+./ts-flatten --include src,components,utils src/main.ts
+
+# Specify custom root directory for path resolution
+./ts-flatten --include src --root /path/to/project src/nested/file.ts
 
 # Output to a file
 ./ts-flatten src/main.ts > flattened.ts
@@ -48,6 +62,48 @@ go build -o ts-flatten .
    - Inlines the content with a file header comment
 4. **Preserve external imports**: Keeps external library imports unchanged
 5. **Cycle detection**: Tracks processed files to avoid infinite loops
+
+## TypeScript Path Mapping Support
+
+The `--include` flag allows you to specify additional import prefixes that should be treated as local imports. This is particularly useful when your TypeScript project uses path mapping in `tsconfig.json`.
+
+For example, if your `tsconfig.json` has:
+
+```json
+{
+  "compilerOptions": {
+    "paths": {
+      "src/*": ["./src/*"],
+      "components/*": ["./src/components/*"]
+    }
+  }
+}
+```
+
+You can use:
+
+```bash
+./ts-flatten --include src,components src/main.ts
+```
+
+This will treat imports like `import { Button } from "src/components/Button"` as local imports and inline them, even though they don't start with `./` or `../`.
+
+**Without `--include`**: These imports are treated as external and preserved as import statements.
+**With `--include`**: These imports are resolved relative to your project root and inlined.
+
+### Custom Root Directory
+
+When working with nested files, you may need to specify a custom root directory for path resolution using the `--root` flag:
+
+```bash
+# If your entry file is deeply nested but src/ should resolve from project root
+./ts-flatten --include src --root ../my-project src/deeply/nested/file.ts
+```
+
+This is particularly useful when:
+
+- Your entry file is in a subdirectory but path mappings are relative to the project root
+- You want to process files from different locations with consistent path resolution
 
 ## Example
 
