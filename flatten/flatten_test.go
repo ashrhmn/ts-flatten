@@ -115,14 +115,14 @@ console.log("Using external libraries");`,
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	// Should keep external imports
-	if !strings.Contains(result, "import React from 'react'") {
+	// Should keep external imports (may be reformatted due to merging)
+	if !strings.Contains(result, `from "react"`) {
 		t.Error("Should preserve React import")
 	}
-	if !strings.Contains(result, "import { lodash } from 'lodash'") {
+	if !strings.Contains(result, `from "lodash"`) {
 		t.Error("Should preserve lodash import")
 	}
-	if !strings.Contains(result, "import * as fs from 'fs'") {
+	if !strings.Contains(result, `from "fs"`) {
 		t.Error("Should preserve fs import")
 	}
 
@@ -416,25 +416,38 @@ export const helper2 = 'helper2';`,
 		}
 	}
 
-	// Should have exactly 5 unique external imports
-	expectedImports := []string{
-		"import React from 'react'",
-		"import { useState } from 'react'",
-		"import lodash from 'lodash'",
-		"import axios from 'axios'",
-		"import { format } from 'date-fns'",
+	// Should have 4 external imports (react imports merged, others separate)
+	expectedModules := []string{
+		`from "react"`,
+		`from "lodash"`,
+		`from "axios"`,
+		`from "date-fns"`,
 	}
 
-	if importCount != len(expectedImports) {
-		t.Errorf("Expected %d external imports, got %d", len(expectedImports), importCount)
+	if importCount != len(expectedModules) {
+		t.Errorf("Expected %d external imports, got %d", len(expectedModules), importCount)
 	}
 
-	// Check that each expected import appears exactly once
-	for _, expectedImport := range expectedImports {
-		count := strings.Count(result, expectedImport)
+	// Check that each expected module appears exactly once
+	for _, expectedModule := range expectedModules {
+		count := strings.Count(result, expectedModule)
 		if count != 1 {
-			t.Errorf("Expected import '%s' to appear exactly once, but found %d occurrences", expectedImport, count)
+			t.Errorf("Expected module '%s' to appear exactly once, but found %d occurrences", expectedModule, count)
 		}
+	}
+
+	// Check that React imports are properly merged
+	if !strings.Contains(result, "React") {
+		t.Error("Should contain React import")
+	}
+	if !strings.Contains(result, "useState") {
+		t.Error("Should contain useState import")
+	}
+
+	// Check that React imports are merged into a single statement
+	reactImportCount := strings.Count(result, `from "react"`)
+	if reactImportCount != 1 {
+		t.Errorf("Expected exactly one import from react, but found %d", reactImportCount)
 	}
 
 	// Should contain file headers for local imports
@@ -443,5 +456,63 @@ export const helper2 = 'helper2';`,
 	}
 	if !strings.Contains(result, "// File: helper2.ts") {
 		t.Error("Should contain helper2.ts file header")
+	}
+}
+
+func TestFlattenFile_MergeImportsFromSameModule(t *testing.T) {
+	files := map[string]string{
+		"main.ts": `import { Injectable } from "@nestjs/common";
+import './helper1';
+import './helper2';
+
+export class MainService {}`,
+		"helper1.ts": `import { Injectable } from "@nestjs/common";
+
+export const helper1 = Injectable;`,
+		"helper2.ts": `import { BadRequestException, Injectable } from "@nestjs/common";
+
+export const helper2 = { BadRequestException, Injectable };`,
+	}
+
+	tempDir := createTestFiles(t, files)
+	mainFile := filepath.Join(tempDir, "main.ts")
+
+	flattener := NewFlattener()
+	result, err := flattener.FlattenFile(mainFile)
+
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Should have only one import from @nestjs/common
+	nestjsImportCount := strings.Count(result, `from "@nestjs/common"`)
+	if nestjsImportCount != 1 {
+		t.Errorf("Expected exactly one import from @nestjs/common, but found %d", nestjsImportCount)
+	}
+
+	// Should contain both Injectable and BadRequestException in the merged import
+	if !strings.Contains(result, "Injectable") {
+		t.Error("Should contain Injectable in merged import")
+	}
+	if !strings.Contains(result, "BadRequestException") {
+		t.Error("Should contain BadRequestException in merged import")
+	}
+
+	// The merged import should contain both items
+	if !strings.Contains(result, "BadRequestException, Injectable") && !strings.Contains(result, "Injectable, BadRequestException") {
+		t.Error("Should merge Injectable and BadRequestException into single import statement")
+	}
+
+	// Injectable should not appear multiple times in import statements
+	lines := strings.Split(result, "\n")
+	injectableInImportCount := 0
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "import ") && strings.Contains(line, "Injectable") {
+			injectableInImportCount++
+		}
+	}
+
+	if injectableInImportCount != 1 {
+		t.Errorf("Injectable should appear in exactly one import statement, but found %d", injectableInImportCount)
 	}
 }
