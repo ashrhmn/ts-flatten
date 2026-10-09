@@ -2,3 +2,4 @@
 *.tsx
 *.css
 ts-flatten
+/bin/

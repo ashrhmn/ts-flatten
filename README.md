@@ -55,6 +55,24 @@ go build -o ts-flatten .
 ./ts-flatten src/main.ts > flattened.ts
 ```
 
+## Build and release
+
+Run `make build` to build `bin/ts-flatten` and `make test` to run tests.
+Override the output directory with `make build BIN_DIR=/path/to/bin`.
+
+After committing and pushing the changes to release, run one of these commands
+from a clean working tree:
+
+```sh
+make tag-patch  # v0.0.1 -> v0.0.2
+make tag-minor  # v0.0.2 -> v0.1.0
+make tag-major  # v0.1.0 -> v1.0.0
+```
+
+Each command fetches tags from `origin`, increments the highest stable
+`vMAJOR.MINOR.PATCH` tag, and creates and pushes the new Git tag, matching
+`gh-agent`. Without an existing stable tag, `make tag-patch` starts at `v0.0.1`.
+
 ## How it works
 
 1. **Parse entry file**: Reads the specified TypeScript file and extracts all import statements
